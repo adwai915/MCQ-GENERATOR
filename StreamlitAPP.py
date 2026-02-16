@@ -1,84 +1,103 @@
-import os
 import json
-import pandas as pd
 import traceback
-from dotenv import load_dotenv
 
-from src.mcqgenerator.utils import read_file, get_table_data
-from src.mcqgenerator.logger import logging
-from src.mcqgenerator.MCQGenerator import generate_evaluate_chain
+import pandas as pd
 import streamlit as st
 
-from langchain.llms import OpenAI
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from langchain.chains import SequentialChain
-from langchain_community.callbacks.manager import get_openai_callback
-import PyPDF2
+from src.mcqgenerator.MCQGenerator import generate_evaluate_chain
+from src.mcqgenerator.utils import get_table_data, parse_quiz_json, read_file
 
 
-with open(r"mcq_gen\response.json", 'r') as file:
-    RESPONSE_JSON = json.load(file)
+st.set_page_config(page_title="Automated MCQ Generator", layout="wide")
+st.title("Automated MCQ Generator")
+st.write("Upload a PDF or TXT file, then generate MCQs.")
 
-# print(RESPONSE_JSON) debugging
+RESPONSE_JSON = {
+    "1": {
+        "mcq": "multiple choice question",
+        "options": {
+            "a": "choice here",
+            "b": "choice here",
+            "c": "choice here",
+            "d": "choice here",
+        },
+        "correct": "correct answer",
+    },
+    "2": {
+        "mcq": "multiple choice question",
+        "options": {
+            "a": "choice here",
+            "b": "choice here",
+            "c": "choice here",
+            "d": "choice here",
+        },
+        "correct": "correct answer",
+    },
+    "3": {
+        "mcq": "multiple choice question",
+        "options": {
+            "a": "choice here",
+            "b": "choice here",
+            "c": "choice here",
+            "d": "choice here",
+        },
+        "correct": "correct answer",
+    },
+}
 
-#creating a title for the app
-st.title("MCQs Creator Application with Langchain 🐦⛓️")
+with st.sidebar:
+    st.header("Settings")
+    subject = st.text_input("Subject", value="General Knowledge")
+    tone = st.selectbox("Tone", ["Simple", "Intermediate", "Advanced"])
+    number = st.number_input("Number of MCQs", min_value=1, max_value=20, value=5, step=1)
 
-#create a form using st.form
-with st.form("user_inputs"):
-    #File input
-    uploaded_file= st.file_uploader("Upload a PDF or Txt File")
+uploaded_file = st.file_uploader("Upload input file", type=["pdf", "txt"])
+generate_clicked = st.button("Generate MCQs", type="primary")
 
-    #Input Fields
-    mcq_count = st.number_input("No. of MCQ's", min_value=3, max_value= 50)
-
-    #subject
-    subject = st.text_input("Insert Subject", max_chars=20)
-
-    #Quiz Tone
-    tone = st.text_input("Complexity level of Questions", max_chars=20, placeholder="simple")
-
-    #Add Button
-    button = st.form_submit_button("Create MCQ's")
-    
-
-    # check if the button is clicked and all fields have input
-    if button and uploaded_file is not None and mcq_count and subject and tone:
-        with st.spinner("loading..."):
-            try:
+if generate_clicked:
+    if uploaded_file is None:
+        st.warning("Please upload a PDF or TXT file first.")
+    else:
+        try:
+            with st.spinner("Generating MCQs..."):
                 text = read_file(uploaded_file)
-                #count tokens and the cost of API call
-                with get_openai_callback() as cb:
-                    response = generate_evaluate_chain({
+                response = generate_evaluate_chain(
+                    {
                         "text": text,
-                        "number": mcq_count,
+                        "number": int(number),
                         "subject": subject,
                         "tone": tone,
-                        "response_json": json.dumps(RESPONSE_JSON)
-                    })
-                    st.success("MCQ's Created Successfully")
-                    #st.write(response)
-            except Exception as e:
-                traceback.print_exception(type(e), e, e.__traceback__)
-                st.error("ERROR!!")
+                        "response_json": json.dumps(RESPONSE_JSON),
+                    }
+                )
 
+            parsed_quiz = parse_quiz_json(response["quiz"])
+            if parsed_quiz:
+                st.subheader("Generated MCQs")
+                for q_no, q_data in parsed_quiz.items():
+                    st.markdown(f"**Q{q_no}. {q_data.get('mcq', '')}**")
+                    options = q_data.get("options", {})
+                    for opt_key in ["a", "b", "c", "d"]:
+                        if opt_key in options:
+                            st.write(f"{opt_key.upper()}. {options[opt_key]}")
+                    st.write(f"Answer: {q_data.get('correct', '')}")
+                    st.write("")
             else:
-                print(f"Total Tokens:{cb.total_tokens}")
-                print(f"Prompt Tokens:{cb.prompt_tokens}")
-                print(f"Completion Tokens:{cb.completion_tokens}")
-                print(f"Total Cost:{cb.total_cost}")
-                if isinstance(response, dict):
-                    #Extract the quiz data from the response
-                    quiz = response.get("quiz", None)
-                    if quiz is not None:
-                        table_data = get_table_data(quiz)
-                        if table_data is not None:
-                            df = pd.DataFrame(table_data)
-                            df.index = df.index+1
-                            st.table(df)
-                            #Display the review in a text box as well
-                        else:
-                            st.error("Error in the table data")
-                    else:
-                        st.write(response)
+                st.warning("Could not parse formatted quiz output. Showing raw response.")
+
+            table_data = get_table_data(response["quiz"])
+            if table_data:
+                st.subheader("MCQ Table")
+                st.dataframe(pd.DataFrame(table_data), use_container_width=True)
+            else:
+                st.warning("Could not parse quiz JSON into table format.")
+
+            with st.expander("Raw JSON Output"):
+                st.code(response["quiz"], language="json")
+
+            st.subheader("Review")
+            st.write(response["review"])
+        except Exception as e:
+            st.error("An error occurred while generating MCQs.")
+            st.code(str(e))
+            st.code(traceback.format_exc())
